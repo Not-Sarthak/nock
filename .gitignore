@@ -1,0 +1,12 @@
+target/
+**/target/
+**/*.rs.bk
+.DS_Store
+*.so
+.idea/
+.vscode/
+test-ledger/
+.surfpool/
+runbooks/
+scripts/
+deploy/

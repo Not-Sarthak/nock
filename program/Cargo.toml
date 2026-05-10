@@ -1,0 +1,25 @@
+[package]
+name        = "nock"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path       = "src/lib.rs"
+
+[dependencies]
+pinocchio.workspace                          = true
+pinocchio-system.workspace                   = true
+pinocchio-token.workspace                    = true
+pinocchio-associated-token-account.workspace = true
+nock-interface                           = { path = "../interface" }
+
+[features]
+default       = []
+no-entrypoint = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

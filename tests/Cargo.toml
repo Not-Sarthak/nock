@@ -1,0 +1,19 @@
+[package]
+name        = "nock-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Integration tests for nock"
+
+[lib]
+crate-type = ["rlib"]
+path       = "src/lib.rs"
+
+[dev-dependencies]
+ed25519-dalek.workspace      = true
+bytemuck.workspace           = true
+solana-pubkey                = { workspace = true, features = ["curve25519"] }
+solana-instruction           = { workspace = true, features = ["std"] }
+solana-sysvar-id.workspace   = true
+nock-interface           = { path = "../interface" }

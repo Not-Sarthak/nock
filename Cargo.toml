@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = ["interface", "program", "tests"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Sarthak <0x.pixelbeta@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/0x-pixelbeta/nock"
+description = "per-maker on-chain order book exchange on solana"
+
+[workspace.dependencies]
+pinocchio                            = { version = "0.11", features = ["cpi", "account-resize"] }
+pinocchio-system                     = "0.6"
+pinocchio-token                      = "0.6"
+pinocchio-associated-token-account   = "0.4"
+solana-address                       = { version = "2.6", features = ["decode", "curve25519"] }
+
+# Off-chain only
+solana-pubkey                        = "4.2"
+solana-instruction                   = "3.4"
+solana-sysvar-id                     = "2.2"
+ed25519-dalek                        = "2.1"
+five8                                = "0.4"
+five8_const                          = "0.1"
+bytemuck                             = { version = "1.16", features = ["derive"] }
+
+[profile.release]
+overflow-checks  = true
+lto              = "fat"
+codegen-units    = 1
+opt-level        = 3
+strip            = true
+panic            = "abort"
+incremental      = false
+debug-assertions = false
+debug            = false
+
+
