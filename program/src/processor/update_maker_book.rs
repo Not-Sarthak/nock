@@ -1,12 +1,13 @@
 use pinocchio::{
-    account::AccountView, error::ProgramError, ProgramResult,
+    account::AccountView, error::ProgramError,
+    sysvars::{clock::Clock, Sysvar}, ProgramResult,
 };
 use nock_interface::{
-    constants::{BOOK_UPDATE_EVENT_TAG, MAKER_BOOK_LEN, MAKER_BOOK_TAG, MAX_LEVELS, MAX_WIRE_LEVELS},
+    constants::{BOOK_UPDATE_EVENT_TAG, MAX_LEVELS, MAX_WIRE_LEVELS},
     error::AmmError,
     events::BookUpdateEvent,
     instruction::UpdateMakerBookData,
-    state::{MakerBook, MakerLevel},
+    state::{load_mut, MakerBook, MakerLevel},
     ID,
 };
 use crate::helpers::assertions::{check_owner, check_signer, check_writable};
@@ -20,9 +21,8 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
         return Err(ProgramError::InvalidInstructionData);
     }
     let args: &UpdateMakerBookData = unsafe { &*(data.as_ptr() as *const UpdateMakerBookData) };
-    let new_seq    = { let s = args.header.sequence_number; s };
-    let mid_ticks  = { let m = args.header.mid_price_ticks; m };
-    let new_slot   = { let s = args.header.last_updated_slot; s };
+    let new_seq    = args.header.sequence_number;
+    let mid_ticks  = args.header.mid_price_ticks;
     let num_bids   = args.header.num_bids as usize;
     let num_asks   = args.header.num_asks as usize;
     if num_bids > MAX_WIRE_LEVELS || num_asks > MAX_WIRE_LEVELS {
@@ -34,11 +34,10 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     check_owner(book, &ID)?;
     check_owner(market, &ID)?;
 
+    let slot = Clock::get()?.slot;
+
     let mut book_data = book.try_borrow_mut()?;
-    if book_data.len() != MAKER_BOOK_LEN || book_data[0..8] != MAKER_BOOK_TAG {
-        return Err(AmmError::InvalidAccountTag.into());
-    }
-    let book_state = unsafe { &mut *(book_data.as_mut_ptr() as *mut MakerBook) };
+    let book_state = load_mut::<MakerBook>(&mut book_data[..])?;
 
     let signer_bytes = signer.address().as_ref();
     if !eq_addr(signer_bytes, &book_state.maker) && !eq_addr(signer_bytes, &book_state.delegate) {
@@ -52,7 +51,7 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     }
 
     book_state.mid_price_ticks   = mid_ticks;
-    book_state.last_updated_slot = new_slot;
+    book_state.last_updated_slot = slot;
 
     let bid_src = unsafe {
         (&raw const (*(data.as_ptr() as *const UpdateMakerBookData)).bid_levels) as *const MakerLevel

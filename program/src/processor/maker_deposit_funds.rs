@@ -2,10 +2,9 @@ use pinocchio::{
     account::AccountView, error::ProgramError, ProgramResult,
 };
 use nock_interface::{
-    constants::{MAKER_BOOK_LEN, MAKER_BOOK_TAG, MARKET_LEN, MARKET_TAG},
     error::AmmError,
     instruction::MakerDepositData,
-    state::{MakerBook, Market},
+    state::{load, load_mut, MakerBook, Market},
     ID,
 };
 use crate::helpers::assertions::{check_owner, check_signer, check_writable};
@@ -34,8 +33,8 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
         return Err(ProgramError::InvalidInstructionData);
     }
     let args: &MakerDepositData = unsafe { &*(data.as_ptr() as *const MakerDepositData) };
-    let base_lots  = { let b = args.base_lots; b };
-    let quote_lots = { let q = args.quote_lots; q };
+    let base_lots  = args.base_lots;
+    let quote_lots = args.quote_lots;
     if base_lots == 0 && quote_lots == 0 {
         return Err(AmmError::AmountInZero.into());
     }
@@ -55,11 +54,7 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     }
 
     let (base_atoms_per_lot, quote_atoms_per_lot) = {
-        let pool_data = unsafe { market.borrow_unchecked() };
-        if pool_data.len() != MARKET_LEN || pool_data[0..8] != MARKET_TAG {
-            return Err(AmmError::InvalidAccountTag.into());
-        }
-        let m = unsafe { &*(pool_data.as_ptr() as *const Market) };
+        let m = load::<Market>(unsafe { market.borrow_unchecked() })?;
         if !eq_addr(base_mint.address().as_ref(),   &m.base_mint)
             || !eq_addr(quote_mint.address().as_ref(),  &m.quote_mint)
             || !eq_addr(base_vault.address().as_ref(),  &m.base_vault)
@@ -71,11 +66,7 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     };
 
     {
-        let book_data: &mut [u8] = unsafe { book.borrow_unchecked_mut() };
-        if book_data.len() != MAKER_BOOK_LEN || book_data[0..8] != MAKER_BOOK_TAG {
-            return Err(AmmError::InvalidAccountTag.into());
-        }
-        let b = unsafe { &mut *(book_data.as_mut_ptr() as *mut MakerBook) };
+        let b = load_mut::<MakerBook>(unsafe { book.borrow_unchecked_mut() })?;
         if !eq_addr(maker.address().as_ref(), &b.maker) {
             return Err(AmmError::UnauthorizedMaker.into());
         }

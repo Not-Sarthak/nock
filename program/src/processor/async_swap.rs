@@ -9,16 +9,16 @@ use pinocchio_system::instructions::CreateAccount;
 use nock_interface::{
     constants::{
         ASYNC_CANCEL_EVENT_TAG, ASYNC_FILL_EVENT_TAG, ASYNC_SWAP_CREATED_TAG,
-        ASYNC_SWAP_LEN, ASYNC_SWAP_TAG, MAKER_BOOK_LEN, MAKER_BOOK_TAG, MARKET_LEN,
-        MARKET_TAG, SEED_ASYNC_SWAP, SYSTEM,
+        ASYNC_SWAP_LEN, SEED_ASYNC_SWAP, SYSTEM,
     },
     error::AmmError,
     events::{AsyncCancelEvent, AsyncFillEvent, AsyncSwapCreatedEvent},
-    state::{async_swap::status, AsyncSwap, MakerBook, Market},
+    state::{async_swap::status, init, load, load_mut, AsyncSwap, MakerBook, Market},
     ID,
 };
 use crate::helpers::assertions::{check_owner, check_pubkey, check_signer, check_writable};
-use crate::helpers::unsafe_eq::eq_addr;
+use crate::helpers::token_account::mint_and_owner;
+use crate::helpers::unsafe_eq::{eq_addr, pubkey_copy_32};
 use super::token_programs;
 
 pub fn process_create(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
@@ -55,11 +55,7 @@ pub fn process_create(accounts: &mut [AccountView], data: &[u8]) -> ProgramResul
 
     let now = Clock::get()?.slot;
     {
-        let pool_data = unsafe { market.borrow_unchecked() };
-        if pool_data.len() != MARKET_LEN || pool_data[0..8] != MARKET_TAG {
-            return Err(AmmError::InvalidAccountTag.into());
-        }
-        let m = unsafe { &*(pool_data.as_ptr() as *const Market) };
+        let m = load::<Market>(unsafe { market.borrow_unchecked() })?;
         let expected = if side == 0 { &m.base_mint } else { &m.quote_mint };
         if !eq_addr(mint_in.address().as_ref(), expected) {
             return Err(AmmError::IncorrectTokenAccountMint.into());
@@ -82,6 +78,15 @@ pub fn process_create(accounts: &mut [AccountView], data: &[u8]) -> ProgramResul
     if async_swap.address() != &derived {
         return Err(AmmError::InvalidPdaBump.into());
     }
+
+    let (escrow_mint, escrow_auth) = mint_and_owner(escrow)?;
+    if !eq_addr(mint_in.address().as_ref(), &escrow_mint) {
+        return Err(AmmError::IncorrectTokenAccountMint.into());
+    }
+    if !eq_addr(async_swap.address().as_ref(), &escrow_auth) {
+        return Err(AmmError::InvalidDestination.into());
+    }
+
     let lamports = super::rent_exempt(ASYNC_SWAP_LEN);
     let seeds = [
         Seed::from(SEED_ASYNC_SWAP),
@@ -107,12 +112,11 @@ pub fn process_create(accounts: &mut [AccountView], data: &[u8]) -> ProgramResul
 
     {
         let mut async_swap_data = async_swap.try_borrow_mut()?;
-        let s = unsafe { &mut *(async_swap_data.as_mut_ptr() as *mut AsyncSwap) };
-        s.tag = ASYNC_SWAP_TAG;
+        let s = init::<AsyncSwap>(&mut async_swap_data[..])?;
         unsafe {
-            crate::helpers::unsafe_eq::pubkey_copy_32(user.address().as_ref().as_ptr(),       s.user.as_mut_ptr());
-            crate::helpers::unsafe_eq::pubkey_copy_32(market.address().as_ref().as_ptr(),     s.market.as_mut_ptr());
-            crate::helpers::unsafe_eq::pubkey_copy_32(escrow.address().as_ref().as_ptr(),     s.user_src_escrow.as_mut_ptr());
+            pubkey_copy_32(user.address().as_ref().as_ptr(),   s.user.as_mut_ptr());
+            pubkey_copy_32(market.address().as_ref().as_ptr(), s.market.as_mut_ptr());
+            pubkey_copy_32(escrow.address().as_ref().as_ptr(), s.user_src_escrow.as_mut_ptr());
         }
         s.user_dst_ata = [0; 32];
         s.amount_in    = amount_in;
@@ -139,15 +143,18 @@ pub fn process_create(accounts: &mut [AccountView], data: &[u8]) -> ProgramResul
 }
 
 pub fn process_execute(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResult {
-    let [maker, async_swap, _escrow, user_dst, maker_src, market, book, token_program, ..] = accounts
+    let [maker, async_swap, escrow, user_dst, maker_src, maker_dst, market, book, token_program, ..] =
+        accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
     check_signer(maker)?;
     check_writable(async_swap)?;
+    check_writable(escrow)?;
     check_writable(user_dst)?;
     check_writable(maker_src)?;
+    check_writable(maker_dst)?;
     check_owner(market, &ID)?;
     check_owner(book, &ID)?;
     check_owner(async_swap, &ID)?;
@@ -156,48 +163,91 @@ pub fn process_execute(accounts: &mut [AccountView], _data: &[u8]) -> ProgramRes
     }
 
     {
-        let book_data = unsafe { book.borrow_unchecked() };
-        if book_data.len() != MAKER_BOOK_LEN || book_data[0..8] != MAKER_BOOK_TAG {
-            return Err(AmmError::InvalidAccountTag.into());
-        }
-        let b = unsafe { &*(book_data.as_ptr() as *const MakerBook) };
+        let b = load::<MakerBook>(unsafe { book.borrow_unchecked() })?;
         if !eq_addr(maker.address().as_ref(), &b.maker) || !eq_addr(market.address().as_ref(), &b.market) {
             return Err(AmmError::UnauthorizedMaker.into());
         }
     }
 
+    let (base_mint_key, quote_mint_key) = {
+        let m = load::<Market>(unsafe { market.borrow_unchecked() })?;
+        (m.base_mint, m.quote_mint)
+    };
+
     let mut async_swap_pubkey: [u8; 32] = [0; 32]; async_swap_pubkey.copy_from_slice(async_swap.address().as_ref());
     let mut maker_pubkey:      [u8; 32] = [0; 32]; maker_pubkey.copy_from_slice(maker.address().as_ref());
 
-    let mut async_swap_data = async_swap.try_borrow_mut()?;
-    if async_swap_data.len() != ASYNC_SWAP_LEN || async_swap_data[0..8] != ASYNC_SWAP_TAG {
-        return Err(AmmError::InvalidAccountTag.into());
-    }
-    let s = unsafe { &mut *(async_swap_data.as_mut_ptr() as *mut AsyncSwap) };
-    if s.status != status::PENDING {
-        return Err(AmmError::AlreadyInitialized.into());
-    }
+    let (side, user_key, amount_in, min_out, bump) = {
+        let async_swap_data = async_swap.try_borrow()?;
+        let s = load::<AsyncSwap>(&async_swap_data[..])?;
+        if s.status != status::PENDING {
+            return Err(AmmError::AlreadyInitialized.into());
+        }
+        if !eq_addr(market.address().as_ref(), &s.market) {
+            return Err(AmmError::InvalidAccountTag.into());
+        }
+        if !eq_addr(escrow.address().as_ref(), &s.user_src_escrow) {
+            return Err(AmmError::InvalidDestination.into());
+        }
+        (s.side, s.user, s.amount_in, s.min_out, s.bump)
+    };
+
     let now = Clock::get()?.slot;
-    if now > s.expiry_slot {
-        return Err(AmmError::QuoteExpired.into());
+    {
+        let async_swap_data = async_swap.try_borrow()?;
+        let s = load::<AsyncSwap>(&async_swap_data[..])?;
+        if now > s.expiry_slot {
+            return Err(AmmError::QuoteExpired.into());
+        }
     }
-    let user_pubkey: [u8; 32] = s.user;
 
-    pinocchio_token::instructions::Transfer::new(maker_src, user_dst, maker, s.min_out).invoke()?;
+    let input_mint  = if side == 0 { base_mint_key } else { quote_mint_key };
+    let output_mint = if side == 0 { quote_mint_key } else { base_mint_key };
 
-    s.status = status::FILLED;
-    unsafe {
-        crate::helpers::unsafe_eq::pubkey_copy_32(user_dst.address().as_ref().as_ptr(), s.user_dst_ata.as_mut_ptr());
+    let (escrow_mint, escrow_auth)        = mint_and_owner(escrow)?;
+    let (user_dst_mint, user_dst_owner)   = mint_and_owner(user_dst)?;
+    let (maker_src_mint, _)               = mint_and_owner(maker_src)?;
+    let (maker_dst_mint, _)               = mint_and_owner(maker_dst)?;
+    if !eq_addr(&input_mint, &escrow_mint) || !eq_addr(&output_mint, &maker_src_mint)
+        || !eq_addr(&input_mint, &maker_dst_mint) || !eq_addr(&output_mint, &user_dst_mint)
+    {
+        return Err(AmmError::IncorrectTokenAccountMint.into());
     }
-    let amount_out = s.min_out;
-    drop(async_swap_data);
+    if !eq_addr(async_swap.address().as_ref(), &escrow_auth) {
+        return Err(AmmError::InvalidDestination.into());
+    }
+    if !eq_addr(&user_key, &user_dst_owner) {
+        return Err(AmmError::InvalidDestination.into());
+    }
+
+    {
+        let mut async_swap_data = async_swap.try_borrow_mut()?;
+        let s = load_mut::<AsyncSwap>(&mut async_swap_data[..])?;
+        s.status = status::FILLED;
+        unsafe {
+            pubkey_copy_32(user_dst.address().as_ref().as_ptr(), s.user_dst_ata.as_mut_ptr());
+        }
+    }
+
+    pinocchio_token::instructions::Transfer::new(maker_src, user_dst, maker, min_out).invoke()?;
+
+    let bump_bytes = [bump];
+    let seeds = [
+        Seed::from(SEED_ASYNC_SWAP),
+        Seed::from(&user_key[..]),
+        Seed::from(market.address().as_ref()),
+        Seed::from(&bump_bytes[..]),
+    ];
+    let signer = [Signer::from(&seeds)];
+    pinocchio_token::instructions::Transfer::new(escrow, maker_dst, async_swap, amount_in)
+        .invoke_signed(&signer)?;
 
     let event = AsyncFillEvent {
         tag: ASYNC_FILL_EVENT_TAG,
         async_swap: async_swap_pubkey,
         maker: maker_pubkey,
-        user: user_pubkey,
-        amount_out,
+        user: user_key,
+        amount_out: min_out,
         slot: now,
     };
     crate::helpers::event::emit(&event);
@@ -219,10 +269,7 @@ pub fn process_cancel(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResu
     }
 
     let mut async_swap_data = async_swap.try_borrow_mut()?;
-    if async_swap_data.len() != ASYNC_SWAP_LEN || async_swap_data[0..8] != ASYNC_SWAP_TAG {
-        return Err(AmmError::InvalidAccountTag.into());
-    }
-    let s = unsafe { &mut *(async_swap_data.as_mut_ptr() as *mut AsyncSwap) };
+    let s = load_mut::<AsyncSwap>(&mut async_swap_data[..])?;
     if s.status != status::PENDING {
         return Err(AmmError::AlreadyInitialized.into());
     }
@@ -231,10 +278,10 @@ pub fn process_cancel(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResu
         return Err(AmmError::QuoteExpired.into());
     }
     if !eq_addr(escrow.address().as_ref(), &s.user_src_escrow) {
-        return Err(AmmError::InvalidAccountTag.into());
+        return Err(AmmError::InvalidDestination.into());
     }
     if user_src.address() == escrow.address() {
-        return Err(AmmError::InvalidAccountTag.into());
+        return Err(AmmError::InvalidDestination.into());
     }
 
     let user_pubkey:   [u8; 32] = s.user;
@@ -243,6 +290,11 @@ pub fn process_cancel(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResu
     let bump = s.bump;
     s.status = status::CANCELLED;
     drop(async_swap_data);
+
+    let (_user_src_mint, user_src_owner) = mint_and_owner(user_src)?;
+    if !eq_addr(&user_pubkey, &user_src_owner) {
+        return Err(AmmError::InvalidDestination.into());
+    }
 
     let bump_bytes = [bump];
     let seeds = [

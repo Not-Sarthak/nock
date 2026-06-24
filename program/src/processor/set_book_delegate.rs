@@ -2,13 +2,12 @@ use pinocchio::{
     account::AccountView, error::ProgramError, ProgramResult,
 };
 use nock_interface::{
-    constants::{MAKER_BOOK_LEN, MAKER_BOOK_TAG},
     error::AmmError,
-    state::MakerBook,
+    state::{load_mut, MakerBook},
     ID,
 };
 use crate::helpers::assertions::{check_owner, check_signer, check_writable};
-use crate::helpers::unsafe_eq::eq_addr;
+use crate::helpers::unsafe_eq::{eq_addr, pubkey_copy_32};
 
 pub fn process(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResult {
     let [maker, book, delegate, ..] = accounts else {
@@ -18,17 +17,12 @@ pub fn process(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResult {
     check_writable(book)?;
     check_owner(book, &ID)?;
 
-    let book_data: &mut [u8] = unsafe { book.borrow_unchecked_mut() };
-    if book_data.len() != MAKER_BOOK_LEN || book_data[0..8] != MAKER_BOOK_TAG {
-        return Err(AmmError::InvalidAccountTag.into());
-    }
-    let book_state = unsafe { &mut *(book_data.as_mut_ptr() as *mut MakerBook) };
+    let book_state = load_mut::<MakerBook>(unsafe { book.borrow_unchecked_mut() })?;
     if !eq_addr(maker.address().as_ref(), &book_state.maker) {
         return Err(AmmError::UnauthorizedMaker.into());
     }
     unsafe {
-        crate::helpers::unsafe_eq::pubkey_copy_32(delegate.address().as_ref().as_ptr(),
-                                                  book_state.delegate.as_mut_ptr());
+        pubkey_copy_32(delegate.address().as_ref().as_ptr(), book_state.delegate.as_mut_ptr());
     }
     Ok(())
 }

@@ -2,9 +2,8 @@ use pinocchio::{
     account::AccountView, error::ProgramError, ProgramResult,
 };
 use nock_interface::{
-    constants::{MAKER_BOOK_LEN, MAKER_BOOK_TAG},
     error::AmmError,
-    state::MakerBook,
+    state::{load, MakerBook},
     ID,
 };
 use crate::helpers::assertions::{check_owner, check_signer, check_writable};
@@ -20,11 +19,7 @@ pub fn process(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResult {
     check_owner(book, &ID)?;
 
     {
-        let book_data = unsafe { book.borrow_unchecked() };
-        if book_data.len() != MAKER_BOOK_LEN || book_data[0..8] != MAKER_BOOK_TAG {
-            return Err(AmmError::InvalidAccountTag.into());
-        }
-        let book_state = unsafe { &*(book_data.as_ptr() as *const MakerBook) };
+        let book_state = load::<MakerBook>(unsafe { book.borrow_unchecked() })?;
         if !eq_addr(maker.address().as_ref(), &book_state.maker) {
             return Err(AmmError::UnauthorizedMaker.into());
         }

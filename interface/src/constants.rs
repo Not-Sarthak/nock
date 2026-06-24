@@ -3,8 +3,8 @@ use pinocchio::Address;
 pub const MAX_LEVELS:      usize = 16;
 pub const MAX_WIRE_LEVELS: usize = 16;
 
-pub const MARKET_TAG:     [u8; 8] = *b"ACHRMKT1";
-pub const MAKER_BOOK_TAG: [u8; 8] = *b"ACHRMKR1";
+pub const MARKET_TAG:     [u8; 8] = *b"NOCKMKT1";
+pub const MAKER_BOOK_TAG: [u8; 8] = *b"NOCKMKR1";
 pub const ASYNC_SWAP_TAG: [u8; 8] = *b"NOCKASW1";
 
 pub const POOL_CREATED_EVENT_TAG: [u8; 8] = *b"NOCKPC01";

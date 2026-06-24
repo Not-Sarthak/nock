@@ -2,7 +2,7 @@ use core::mem::offset_of;
 use nock_interface::state::{Market, MakerBook, MakerLevel, AsyncSwap};
 
 #[test]
-fn market_field_offsets_match_archer() {
+fn market_field_offsets() {
     assert_eq!(offset_of!(Market, tag),         0);
     assert_eq!(offset_of!(Market, market_id),   8);
     assert_eq!(offset_of!(Market, base_mint),   40);
@@ -30,7 +30,7 @@ fn market_field_offsets_match_archer() {
 }
 
 #[test]
-fn maker_book_field_offsets_match_archer() {
+fn maker_book_field_offsets() {
     assert_eq!(offset_of!(MakerBook, tag),                         0);
     assert_eq!(offset_of!(MakerBook, maker),                       8);
     assert_eq!(offset_of!(MakerBook, market),                      40);

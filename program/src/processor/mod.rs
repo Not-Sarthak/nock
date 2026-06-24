@@ -1,6 +1,7 @@
 pub mod create_pool;
 pub mod toggle_market_state;
 pub mod update_config;
+pub mod collect_fees;
 pub mod async_swap;
 pub mod init_maker_book;
 pub mod update_maker_book;
@@ -15,6 +16,7 @@ pub mod maker_set_sequence;
 pub mod update_sync_spread;
 pub mod update_expiry_in_slots;
 pub mod close_maker_book;
+pub mod set_book_halt;
 
 pub mod token_programs {
     use nock_interface::constants::SPL_TOKEN;

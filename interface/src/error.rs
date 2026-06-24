@@ -9,11 +9,12 @@ pub enum AmmError {
     InvalidTokenProgram      = 0x103,
     InvalidSystemProgram     = 0x104,
     InvalidAtaProgram        = 0x105,
-    InvalidArcherTreasury    = 0x106,
+    InvalidTreasury          = 0x106,
     InvalidTokenMintOwner    = 0x107,
     IncorrectTokenAccountMint = 0x108,
     OwnerNotProgram          = 0x109,
     InvalidPdaBump           = 0x10a,
+    InvalidDestination       = 0x10b,
 
     InvalidMakerSignature    = 0x1f0,
     UnauthorizedMaker        = 0x1f6,
@@ -30,6 +31,7 @@ pub enum AmmError {
     MarketPaused             = 0x300,
     MarketNotPaused          = 0x301,
     InvalidMarketConfig      = 0x302,
+    BookHalted               = 0x303,
 }
 
 impl From<AmmError> for ProgramError {

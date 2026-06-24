@@ -37,8 +37,8 @@ fn seeds_pairwise_distinct() {
 }
 
 #[test]
-fn account_sizes_match_archer() {
-    assert_eq!(MARKET_LEN, 272, "Market header byte-compatible with Archer");
-    assert_eq!(MAKER_BOOK_LEN, 776, "MakerBook byte-compatible with Archer");
-    assert_eq!(MAX_LEVELS, 16, "16 bid + 16 ask levels per book (archer)");
+fn account_sizes() {
+    assert_eq!(MARKET_LEN, 272, "Market header fixed at 272 bytes");
+    assert_eq!(MAKER_BOOK_LEN, 776, "MakerBook fixed at 776 bytes");
+    assert_eq!(MAX_LEVELS, 16, "16 bid + 16 ask levels per book");
 }

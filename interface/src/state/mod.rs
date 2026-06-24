@@ -1,5 +1,7 @@
 use pinocchio::error::ProgramError;
 
+use crate::error::AmmError;
+
 pub mod market;
 pub mod maker_book;
 pub mod async_swap;
@@ -19,7 +21,7 @@ pub fn load<T: Tagged>(bytes: &[u8]) -> Result<&T, ProgramError> {
         return Err(ProgramError::InvalidAccountData);
     }
     if bytes[0..8] != T::TAG {
-        return Err(ProgramError::InvalidAccountData);
+        return Err(AmmError::InvalidAccountTag.into());
     }
     Ok(unsafe { &*(bytes.as_ptr() as *const T) })
 }
@@ -30,7 +32,7 @@ pub fn load_mut<T: Tagged>(bytes: &mut [u8]) -> Result<&mut T, ProgramError> {
         return Err(ProgramError::InvalidAccountData);
     }
     if bytes[0..8] != T::TAG {
-        return Err(ProgramError::InvalidAccountData);
+        return Err(AmmError::InvalidAccountTag.into());
     }
     Ok(unsafe { &mut *(bytes.as_mut_ptr() as *mut T) })
 }

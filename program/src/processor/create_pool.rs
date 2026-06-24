@@ -8,12 +8,12 @@ use pinocchio_associated_token_account::instructions::CreateIdempotent;
 use pinocchio_system::instructions::CreateAccount;
 use nock_interface::{
     constants::{
-        ATA, MARKET_LEN, MARKET_TAG, MAX_FEE_PPM, POOL_CREATED_EVENT_TAG, SEED_MARKET, SYSTEM,
+        ATA, MARKET_LEN, MAX_FEE_PPM, POOL_CREATED_EVENT_TAG, SEED_MARKET, SYSTEM,
     },
     error::AmmError,
     events::PoolCreatedEvent,
     instruction::CreatePoolData,
-    state::Market,
+    state::{init, Market},
     ID,
 };
 use crate::helpers::assertions::{check_pubkey, check_signer, check_writable};
@@ -73,6 +73,12 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
         return Err(AmmError::InvalidMarketConfig.into());
     }
     if maker_fee_ppm.abs() > MAX_FEE_PPM || taker_fee_ppm.abs() > MAX_FEE_PPM {
+        return Err(AmmError::InvalidMarketConfig.into());
+    }
+    if args.min_async_delay_slots > args.max_async_delay_slots {
+        return Err(AmmError::InvalidMarketConfig.into());
+    }
+    if eq_addr(base_mint.address().as_ref(), &args.quote_mint) {
         return Err(AmmError::InvalidMarketConfig.into());
     }
 
@@ -136,7 +142,7 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     market_pubkey.copy_from_slice(market.address().as_ref());
     base_mint_pubkey.copy_from_slice(base_mint.address().as_ref());
     quote_mint_pubkey.copy_from_slice(quote_mint.address().as_ref());
-    admin_pubkey.copy_from_slice(payer.address().as_ref());
+    admin_pubkey.copy_from_slice(&args.market_authority);
 
     let market_id_pk:  [u8; 32] = market.address().as_ref().try_into().unwrap();
     let base_mint_pk:  [u8; 32] = base_mint.address().as_ref().try_into().unwrap();
@@ -144,8 +150,7 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     let base_vault_pk: [u8; 32] = base_vault.address().as_ref().try_into().unwrap();
     let quote_vault_pk:[u8; 32] = quote_vault.address().as_ref().try_into().unwrap();
     let mut market_data = market.try_borrow_mut()?;
-    let market_state = unsafe { &mut *(market_data.as_mut_ptr() as *mut Market) };
-    market_state.tag         = MARKET_TAG;
+    let market_state = init::<Market>(&mut market_data[..])?;
     market_state.market_id   = market_id_pk;
     market_state.base_mint   = base_mint_pk;
     market_state.quote_mint  = quote_mint_pk;

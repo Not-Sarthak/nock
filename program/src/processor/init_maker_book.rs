@@ -6,12 +6,9 @@ use pinocchio::{
 };
 use pinocchio_system::instructions::CreateAccount;
 use nock_interface::{
-    constants::{
-        MAKER_BOOK_LEN, MAKER_BOOK_TAG, MARKET_LEN, MARKET_TAG, MAX_LEVELS,
-        SEED_MAKER_BOOK, SYSTEM,
-    },
+    constants::{MAKER_BOOK_LEN, MAX_LEVELS, SEED_MAKER_BOOK, SYSTEM},
     error::AmmError,
-    state::{MakerBook, MakerLevel, Market},
+    state::{init, load, MakerBook, MakerLevel, Market},
     ID,
 };
 use crate::helpers::assertions::{check_owner, check_pubkey, check_signer, check_writable};
@@ -30,12 +27,7 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     check_owner(market, &ID)?;
     check_pubkey(system_program, &SYSTEM)?;
 
-    {
-        let market_data = unsafe { market.borrow_unchecked() };
-        if market_data.len() != MARKET_LEN || market_data[0..8] != MARKET_TAG {
-            return Err(AmmError::InvalidAccountTag.into());
-        }
-    }
+    let market_id = load::<Market>(unsafe { market.borrow_unchecked() })?.market_id;
 
     let bump_bytes = [bump];
     let derived = Address::derive_address(
@@ -63,16 +55,8 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     }
     .invoke_signed(&signer)?;
 
-    let mut market_id: [u8; 32] = [0; 32];
-    {
-        let market_data = unsafe { market.borrow_unchecked() };
-        let market_state = unsafe { &*(market_data.as_ptr() as *const Market) };
-        market_id.copy_from_slice(&market_state.market_id);
-    }
-
     let mut book_data = book.try_borrow_mut()?;
-    let book_state = unsafe { &mut *(book_data.as_mut_ptr() as *mut MakerBook) };
-    book_state.tag = MAKER_BOOK_TAG;
+    let book_state = init::<MakerBook>(&mut book_data[..])?;
     unsafe {
         crate::helpers::unsafe_eq::pubkey_copy_32(maker.address().as_ref().as_ptr(), book_state.maker.as_mut_ptr());
         crate::helpers::unsafe_eq::pubkey_copy_32(market_id.as_ptr(), book_state.market.as_mut_ptr());

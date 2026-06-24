@@ -46,9 +46,15 @@ impl Tagged for MakerBook {
 pub mod book_status {
     pub const ACTIVE: u8 = 0;
     pub const CLOSED: u8 = 1;
+    pub const HALTED: u8 = 2;
 }
 
 impl MakerBook {
+    #[inline(always)]
+    pub fn is_active(&self) -> bool {
+        self.status == book_status::ACTIVE
+    }
+
     #[inline(always)]
     pub fn try_bump_sequence(&mut self, new_seq: u64) -> bool {
         if new_seq <= self.last_updated_sequence_number {
