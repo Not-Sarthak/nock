@@ -6,12 +6,11 @@ use pinocchio::{
     ProgramResult,
 };
 use nock_interface::{
-    constants::{
-        MAX_LEVELS, MAX_QUOTE_AGE_SLOTS, PPM_DENOM, SEED_MARKET, SYNC_FILL_EVENT_TAG,
-    },
+    constants::{MAX_LEVELS, MAX_QUOTE_AGE_SLOTS, SEED_MARKET, SYNC_FILL_EVENT_TAG},
     error::AmmError,
     events::SyncFillEvent,
     instruction::SyncSwapData,
+    math::{level_price_ticks, price_fill, SIDE_SELL_BASE},
     state::{load, load_mut, maker_book::book_status, MakerBook, Market},
     ID,
 };
@@ -41,15 +40,15 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
         return Err(ProgramError::InvalidInstructionData);
     }
     let args: &SyncSwapData = unsafe { &*(data.as_ptr() as *const SyncSwapData) };
-    let amount_in_lots = args.amount_in;
-    let min_out_lots   = args.min_amount_out;
+    let amount_in_lots = args.amount_in_lots;
+    let limit_lots     = args.limit_lots;
     let side           = args.side;
-    let level_index    = args.quote_index;
+    let level_index    = args.quote_index as usize;
 
     if amount_in_lots == 0 {
         return Err(AmmError::AmountInZero.into());
     }
-    if (level_index as usize) >= MAX_LEVELS {
+    if level_index >= MAX_LEVELS {
         return Err(AmmError::QuoteIndexOutOfBounds.into());
     }
     if side > 1 {
@@ -57,6 +56,7 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     }
 
     check_signer(user)?;
+    check_writable(market)?;
     check_writable(user_dst)?;
     check_writable(base_vault)?;
     check_writable(quote_vault)?;
@@ -72,9 +72,11 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
 
     let (
         admin, market_bump, base_atoms_per_base_lot, quote_atoms_per_quote_lot,
-        tick_size, taker_fee_ppm, base_mint_key, quote_mint_key, scale,
+        tick_size, base_atoms_per_base_unit, maker_fee_ppm, taker_fee_ppm,
+        base_mint_key, quote_mint_key,
     ) = {
-        let m = load::<Market>(unsafe { market.borrow_unchecked() })?;
+        let market_data = market.try_borrow()?;
+        let m = load::<Market>(&market_data[..])?;
         if m.is_paused() {
             return Err(AmmError::MarketPaused.into());
         }
@@ -88,34 +90,39 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
         if m.tick_size_in_quote_atoms_per_base_unit == 0
             || m.base_atoms_per_base_lot == 0
             || m.quote_atoms_per_quote_lot == 0
+            || m.base_atoms_per_base_unit == 0
         {
             return Err(AmmError::PriceMathOverflow.into());
         }
         (
             m.admin, m.market_bump,
             m.base_atoms_per_base_lot, m.quote_atoms_per_quote_lot,
-            m.tick_size_in_quote_atoms_per_base_unit, m.taker_fee_ppm,
+            m.tick_size_in_quote_atoms_per_base_unit, m.base_atoms_per_base_unit,
+            m.maker_fee_ppm, m.taker_fee_ppm,
             m.base_mint, m.quote_mint,
-            (m.raw_base_units_per_base_unit as u128).max(1),
         )
     };
 
-    let (book_seq, book_maker, in_atoms, out_atoms, fee_quote_lots, in_report_lots, out_report_lots) = {
-        let b = load_mut::<MakerBook>(unsafe { book.borrow_unchecked_mut() })?;
+    let (book_seq, book_maker, in_atoms, out_atoms, protocol_fee_lots, in_report_lots, out_report_lots) = {
+        let mut book_data = book.try_borrow_mut()?;
+        let b = load_mut::<MakerBook>(&mut book_data[..])?;
+
         if !eq_addr(market.address().as_ref(), &b.market) {
             return Err(AmmError::InvalidAccountTag.into());
         }
         if b.status != book_status::ACTIVE {
             return Err(AmmError::BookHalted.into());
         }
-        if clock.slot > b.last_updated_slot.saturating_add(MAX_QUOTE_AGE_SLOTS) {
+
+        let max_age = if b.expiry_in_slots == 0 { MAX_QUOTE_AGE_SLOTS } else { b.expiry_in_slots };
+        if clock.slot > b.last_updated_slot.saturating_add(max_age) {
             return Err(AmmError::QuoteExpired.into());
         }
 
-        let level = if side == 0 {
-            b.bid_levels[level_index as usize]
+        let level = if side == SIDE_SELL_BASE {
+            b.bid_levels[level_index]
         } else {
-            b.ask_levels[level_index as usize]
+            b.ask_levels[level_index]
         };
         if level.size_in_base_lots == 0 {
             return Err(AmmError::QuoteIndexOutOfBounds.into());
@@ -124,87 +131,91 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
             return Err(AmmError::QuoteSizeTooSmall.into());
         }
 
-        let mid    = b.mid_price_ticks as i128;
-        let offset = level.price_offset_ticks as i128;
-        let spread = b.sync_spread_ticks as i128;
-        let price_ticks: i128 = if side == 0 {
-            mid - offset - spread
+        let price_ticks = level_price_ticks(
+            side,
+            b.mid_price_ticks,
+            level.price_offset_ticks,
+            b.sync_spread_ticks,
+        )?;
+
+        let fill = price_fill(
+            side,
+            amount_in_lots,
+            price_ticks,
+            base_atoms_per_base_lot,
+            quote_atoms_per_quote_lot,
+            tick_size,
+            base_atoms_per_base_unit,
+            maker_fee_ppm,
+            taker_fee_ppm,
+        )?;
+
+        let gross        = fill.gross_quote_lots;
+        let taker_fee    = fill.taker_fee_lots;
+        let maker_fee    = fill.maker_fee_lots;
+        let protocol_fee = fill.protocol_fee_lots();
+
+        let remaining = level.size_in_base_lots - amount_in_lots;
+        if side == SIDE_SELL_BASE {
+            b.bid_levels[level_index].size_in_base_lots = remaining;
         } else {
-            mid + offset + spread
-        };
-        if price_ticks <= 0 {
-            return Err(AmmError::PriceMathOverflow.into());
+            b.ask_levels[level_index].size_in_base_lots = remaining;
         }
 
-        let base_atoms = amount_in_lots
-            .checked_mul(base_atoms_per_base_lot)
-            .ok_or(AmmError::PriceMathOverflow)?;
-        let gross_quote_atoms = (base_atoms as u128)
-            .checked_mul(price_ticks as u128)
-            .ok_or(AmmError::PriceMathOverflow)?
-            .checked_mul(tick_size as u128)
-            .ok_or(AmmError::PriceMathOverflow)?
-            / scale;
-        if gross_quote_atoms == 0 || gross_quote_atoms > u64::MAX as u128 {
-            return Err(AmmError::PriceMathOverflow.into());
-        }
-        let gross_quote_lots = (gross_quote_atoms as u64) / quote_atoms_per_quote_lot;
-        if gross_quote_lots == 0 {
-            return Err(AmmError::QuoteSizeTooSmall.into());
-        }
-        let fee_quote_lots =
-            (((gross_quote_lots as i128) * (taker_fee_ppm as i128)) / PPM_DENOM as i128).max(0) as u64;
-
-        let seq = b.last_updated_sequence_number;
-
-        let (in_atoms, out_atoms, in_report, out_report) = if side == 0 {
-            let net_quote_lots = gross_quote_lots.saturating_sub(fee_quote_lots);
-            if net_quote_lots < min_out_lots {
+        let (in_atoms, out_atoms, in_report, out_report) = if side == SIDE_SELL_BASE {
+            let net_quote_lots = gross.checked_sub(taker_fee).ok_or(AmmError::PriceMathOverflow)?;
+            if net_quote_lots < limit_lots {
                 return Err(AmmError::SlippageExceeded.into());
             }
-            if b.quote_free < gross_quote_lots {
+            let maker_debit = gross.checked_add(maker_fee).ok_or(AmmError::PriceMathOverflow)?;
+            if b.quote_free < maker_debit {
                 return Err(AmmError::InsufficientVaultBalance.into());
             }
-            b.base_free  = b.base_free.checked_add(amount_in_lots).ok_or(AmmError::PriceMathOverflow)?;
-            b.quote_free -= gross_quote_lots;
+            b.quote_free -= maker_debit;
+            b.base_free = b.base_free
+                .checked_add(amount_in_lots)
+                .ok_or(AmmError::PriceMathOverflow)?;
 
-            let in_atoms  = base_atoms;
             let out_atoms = net_quote_lots
                 .checked_mul(quote_atoms_per_quote_lot)
                 .ok_or(AmmError::PriceMathOverflow)?;
-            (in_atoms, out_atoms, amount_in_lots, net_quote_lots)
+            (fill.base_atoms, out_atoms, amount_in_lots, net_quote_lots)
         } else {
-            if amount_in_lots < min_out_lots {
+            let total_quote_in_lots = gross
+                .checked_add(taker_fee)
+                .ok_or(AmmError::PriceMathOverflow)?;
+            if total_quote_in_lots > limit_lots {
                 return Err(AmmError::SlippageExceeded.into());
             }
             if b.base_free < amount_in_lots {
                 return Err(AmmError::InsufficientVaultBalance.into());
             }
-            let total_quote_in_lots = gross_quote_lots
-                .checked_add(fee_quote_lots)
+            let maker_credit = gross.checked_sub(maker_fee).ok_or(AmmError::PriceMathOverflow)?;
+            b.base_free -= amount_in_lots;
+            b.quote_free = b.quote_free
+                .checked_add(maker_credit)
                 .ok_or(AmmError::PriceMathOverflow)?;
-            b.base_free  -= amount_in_lots;
-            b.quote_free  = b.quote_free.checked_add(gross_quote_lots).ok_or(AmmError::PriceMathOverflow)?;
 
-            let in_atoms  = total_quote_in_lots
+            let in_atoms = total_quote_in_lots
                 .checked_mul(quote_atoms_per_quote_lot)
                 .ok_or(AmmError::PriceMathOverflow)?;
-            let out_atoms = base_atoms;
-            (in_atoms, out_atoms, total_quote_in_lots, amount_in_lots)
+            (in_atoms, fill.base_atoms, total_quote_in_lots, amount_in_lots)
         };
 
-        b.last_updated_sequence_number = seq.checked_add(1).ok_or(AmmError::PriceMathOverflow)?;
-        b.last_updated_slot            = clock.slot;
-        (seq, b.maker, in_atoms, out_atoms, fee_quote_lots, in_report, out_report)
+        (
+            b.last_updated_sequence_number, b.maker,
+            in_atoms, out_atoms, protocol_fee, in_report, out_report,
+        )
     };
 
-    if fee_quote_lots > 0 {
-        let mut pool_data = market.try_borrow_mut()?;
-        let m = load_mut::<Market>(&mut pool_data[..])?;
-        m.uncollected_fees_quote_lots = m.uncollected_fees_quote_lots.saturating_add(fee_quote_lots);
+    if protocol_fee_lots > 0 {
+        let mut market_data = market.try_borrow_mut()?;
+        let m = load_mut::<Market>(&mut market_data[..])?;
+        m.uncollected_fees_quote_lots =
+            m.uncollected_fees_quote_lots.saturating_add(protocol_fee_lots);
     }
 
-    let (vault_in, vault_out) = if side == 0 {
+    let (vault_in, vault_out) = if side == SIDE_SELL_BASE {
         (base_vault, quote_vault)
     } else {
         (quote_vault, base_vault)
@@ -224,8 +235,10 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     pinocchio_token::instructions::Transfer::new(vault_out, user_dst, market, out_atoms)
         .invoke_signed(&market_signer)?;
 
-    let mut user_pubkey:  [u8; 32] = [0; 32]; user_pubkey.copy_from_slice(user.address().as_ref());
-    let mut market_pubkey:[u8; 32] = [0; 32]; market_pubkey.copy_from_slice(market.address().as_ref());
+    let mut user_pubkey:   [u8; 32] = [0; 32];
+    let mut market_pubkey: [u8; 32] = [0; 32];
+    user_pubkey.copy_from_slice(user.address().as_ref());
+    market_pubkey.copy_from_slice(market.address().as_ref());
 
     let event = SyncFillEvent {
         tag:        SYNC_FILL_EVENT_TAG,
@@ -235,7 +248,7 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
         sequence:   book_seq,
         amount_in:  in_report_lots,
         amount_out: out_report_lots,
-        fee:        fee_quote_lots,
+        fee:        protocol_fee_lots,
         slot:       clock.slot,
         side:       side as u64,
     };

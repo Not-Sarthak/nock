@@ -4,6 +4,7 @@ pub mod constants;
 pub mod error;
 pub mod events;
 pub mod instruction;
+pub mod math;
 pub mod state;
 
 pub mod id {

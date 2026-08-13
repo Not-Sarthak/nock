@@ -4,7 +4,7 @@ use pinocchio::{
 use nock_interface::{
     error::AmmError,
     instruction::UpdateSyncSpreadData,
-    state::{load, load_mut, MakerBook, Market},
+    state::{load_mut, MakerBook},
     ID,
 };
 use crate::helpers::assertions::{check_owner, check_signer, check_writable};
@@ -24,9 +24,9 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     check_writable(book)?;
     check_owner(book, &ID)?;
     check_owner(market, &ID)?;
-    load::<Market>(unsafe { market.borrow_unchecked() })?;
 
-    let book_state = load_mut::<MakerBook>(unsafe { book.borrow_unchecked_mut() })?;
+    let mut book_data = book.try_borrow_mut()?;
+    let book_state = load_mut::<MakerBook>(&mut book_data[..])?;
     let signer_bytes = signer.address().as_ref();
     if !eq_addr(signer_bytes, &book_state.maker) && !eq_addr(signer_bytes, &book_state.delegate) {
         return Err(AmmError::UnauthorizedMaker.into());

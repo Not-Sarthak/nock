@@ -55,7 +55,8 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     }
 
     let (admin, market_bump, base_atoms_per_lot, quote_atoms_per_lot, base_mint_key, quote_mint_key) = {
-        let m = load::<Market>(unsafe { market.borrow_unchecked() })?;
+        let market_data = market.try_borrow()?;
+        let m = load::<Market>(&market_data[..])?;
         if !eq_addr(base_mint.address().as_ref(), &m.base_mint)
             || !eq_addr(quote_mint.address().as_ref(), &m.quote_mint)
             || !eq_addr(base_vault.address().as_ref(), &m.base_vault)
@@ -67,7 +68,8 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     };
 
     {
-        let b = load_mut::<MakerBook>(unsafe { book.borrow_unchecked_mut() })?;
+        let mut book_data = book.try_borrow_mut()?;
+        let b = load_mut::<MakerBook>(&mut book_data[..])?;
         if !eq_addr(maker.address().as_ref(), &b.maker) {
             return Err(AmmError::UnauthorizedMaker.into());
         }

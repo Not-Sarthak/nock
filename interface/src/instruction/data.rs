@@ -10,13 +10,8 @@ pub struct CreatePoolData {
     pub tick_size_in_quote_atoms_per_base_unit: u64,
     pub base_atoms_per_base_lot:                u64,
     pub quote_atoms_per_quote_lot:              u64,
-    pub raw_base_units_per_base_unit:           u64,
     pub maker_fee_ppm:                          i32,
     pub taker_fee_ppm:                          i32,
-    pub base_decimals:                          u8,
-    pub quote_decimals:                         u8,
-    pub mode:                                   u8,
-    pub sync_fee_multiplier:                    u8,
     pub min_async_delay_slots:                  u16,
     pub max_async_delay_slots:                  u16,
     pub market_bump:                            u8,
@@ -45,10 +40,10 @@ const _: () = assert!(core::mem::size_of::<UpdateMakerBookData>() == UPDATE_MAKE
 
 #[repr(C, packed)]
 pub struct SyncSwapData {
-    pub amount_in:      u64,
-    pub min_amount_out: u64,
-    pub side:           u8,
-    pub quote_index:    u8,
+    pub amount_in_lots: u64,
+    pub limit_lots:  u64,
+    pub side:        u8,
+    pub quote_index: u8,
 }
 const _: () = assert!(core::mem::size_of::<SyncSwapData>() == 18);
 
@@ -85,3 +80,13 @@ pub struct UpdateExpiryInSlotsData {
     pub expiry_in_slots: u64,
 }
 const _: () = assert!(core::mem::size_of::<UpdateExpiryInSlotsData>() == 8);
+
+#[repr(C, packed)]
+pub struct AsyncSwapCreateData {
+    pub bump:            u8,
+    pub side:            u8,
+    pub amount_in_atoms: u64,
+    pub min_out_atoms:   u64,
+    pub expiry_slot:     u64,
+}
+const _: () = assert!(core::mem::size_of::<AsyncSwapCreateData>() == 26);

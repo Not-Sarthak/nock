@@ -62,12 +62,12 @@ const _: () = assert!(core::mem::size_of::<BookUpdateEvent>() == 8 + 32*3 + 8*2)
 
 #[repr(C)]
 pub struct PoolCreatedEvent {
-    pub tag:         [u8; 8],
-    pub pool:        [u8; 32],
-    pub mint_a:      [u8; 32],
-    pub mint_b:      [u8; 32],
-    pub admin:       [u8; 32],
-    pub price_scale: u64,
-    pub fee_bps:     u64,
+    pub tag:           [u8; 8],
+    pub pool:          [u8; 32],
+    pub mint_a:        [u8; 32],
+    pub mint_b:        [u8; 32],
+    pub admin:         [u8; 32],
+    pub price_scale:   u64,
+    pub taker_fee_ppm: i64,
 }
 const _: () = assert!(core::mem::size_of::<PoolCreatedEvent>() == 8 + 32*4 + 8*2);

@@ -17,7 +17,8 @@ pub fn process(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResult {
     check_writable(book)?;
     check_owner(book, &ID)?;
 
-    let book_state = load_mut::<MakerBook>(unsafe { book.borrow_unchecked_mut() })?;
+    let mut book_data = book.try_borrow_mut()?;
+    let book_state = load_mut::<MakerBook>(&mut book_data[..])?;
     if !eq_addr(maker.address().as_ref(), &book_state.maker) {
         return Err(AmmError::UnauthorizedMaker.into());
     }

@@ -3,7 +3,7 @@ use pinocchio::{
     sysvars::{clock::Clock, Sysvar}, ProgramResult,
 };
 use nock_interface::{
-    constants::{BOOK_UPDATE_EVENT_TAG, MAX_LEVELS, MAX_WIRE_LEVELS},
+    constants::{BOOK_UPDATE_EVENT_TAG, MAX_LEVELS},
     error::AmmError,
     events::BookUpdateEvent,
     instruction::UpdateMakerBookData,
@@ -21,11 +21,11 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
         return Err(ProgramError::InvalidInstructionData);
     }
     let args: &UpdateMakerBookData = unsafe { &*(data.as_ptr() as *const UpdateMakerBookData) };
-    let new_seq    = args.header.sequence_number;
-    let mid_ticks  = args.header.mid_price_ticks;
-    let num_bids   = args.header.num_bids as usize;
-    let num_asks   = args.header.num_asks as usize;
-    if num_bids > MAX_WIRE_LEVELS || num_asks > MAX_WIRE_LEVELS {
+    let new_seq   = args.header.sequence_number;
+    let mid_ticks = args.header.mid_price_ticks;
+    let num_bids  = args.header.num_bids as usize;
+    let num_asks  = args.header.num_asks as usize;
+    if num_bids > MAX_LEVELS || num_asks > MAX_LEVELS {
         return Err(ProgramError::InvalidInstructionData);
     }
 
@@ -59,23 +59,27 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     let ask_src = unsafe {
         (&raw const (*(data.as_ptr() as *const UpdateMakerBookData)).ask_levels) as *const MakerLevel
     };
+    let zero = MakerLevel { size_in_base_lots: 0, price_offset_ticks: 0 };
     for i in 0..num_bids {
         book_state.bid_levels[i] = unsafe { core::ptr::read_unaligned(bid_src.add(i)) };
     }
     for i in num_bids..MAX_LEVELS {
-        book_state.bid_levels[i] = MakerLevel { size_in_base_lots: 0, price_offset_ticks: 0 };
+        book_state.bid_levels[i] = zero;
     }
     for i in 0..num_asks {
         book_state.ask_levels[i] = unsafe { core::ptr::read_unaligned(ask_src.add(i)) };
     }
     for i in num_asks..MAX_LEVELS {
-        book_state.ask_levels[i] = MakerLevel { size_in_base_lots: 0, price_offset_ticks: 0 };
+        book_state.ask_levels[i] = zero;
     }
     drop(book_data);
 
-    let mut book_pubkey:   [u8; 32] = [0; 32]; book_pubkey.copy_from_slice(book.address().as_ref());
-    let mut signer_pubkey: [u8; 32] = [0; 32]; signer_pubkey.copy_from_slice(signer.address().as_ref());
-    let mut market_pubkey: [u8; 32] = [0; 32]; market_pubkey.copy_from_slice(market.address().as_ref());
+    let mut book_pubkey:   [u8; 32] = [0; 32];
+    let mut signer_pubkey: [u8; 32] = [0; 32];
+    let mut market_pubkey: [u8; 32] = [0; 32];
+    book_pubkey.copy_from_slice(book.address().as_ref());
+    signer_pubkey.copy_from_slice(signer.address().as_ref());
+    market_pubkey.copy_from_slice(market.address().as_ref());
     let event = BookUpdateEvent {
         tag: BOOK_UPDATE_EVENT_TAG,
         book: book_pubkey,

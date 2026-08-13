@@ -1,5 +1,6 @@
 use pinocchio::{
-    account::AccountView, error::ProgramError, ProgramResult,
+    account::AccountView, error::ProgramError,
+    sysvars::{clock::Clock, Sysvar}, ProgramResult,
 };
 use nock_interface::{
     error::AmmError,
@@ -25,7 +26,10 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     check_writable(book)?;
     check_owner(book, &ID)?;
 
-    let book_state = load_mut::<MakerBook>(unsafe { book.borrow_unchecked_mut() })?;
+    let slot = Clock::get()?.slot;
+
+    let mut book_data = book.try_borrow_mut()?;
+    let book_state = load_mut::<MakerBook>(&mut book_data[..])?;
     let signer_bytes = signer.address().as_ref();
     if !eq_addr(signer_bytes, &book_state.maker) && !eq_addr(signer_bytes, &book_state.delegate) {
         return Err(AmmError::UnauthorizedMaker.into());
@@ -33,6 +37,7 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     if !book_state.try_bump_sequence(new_seq) {
         return Err(AmmError::StaleSequence.into());
     }
-    book_state.mid_price_ticks = new_mid;
+    book_state.mid_price_ticks   = new_mid;
+    book_state.last_updated_slot = slot;
     Ok(())
 }

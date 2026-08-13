@@ -22,7 +22,8 @@ pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     check_writable(book)?;
     check_owner(book, &ID)?;
 
-    let b = load_mut::<MakerBook>(unsafe { book.borrow_unchecked_mut() })?;
+    let mut book_data = book.try_borrow_mut()?;
+    let b = load_mut::<MakerBook>(&mut book_data[..])?;
     let signer_bytes = signer.address().as_ref();
     if !eq_addr(signer_bytes, &b.maker) && !eq_addr(signer_bytes, &b.delegate) {
         return Err(AmmError::UnauthorizedMaker.into());

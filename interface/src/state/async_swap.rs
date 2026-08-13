@@ -6,10 +6,10 @@ pub struct AsyncSwap {
     pub tag:             [u8; 8],
     pub user:            [u8; 32],
     pub market:          [u8; 32],
-    pub user_dst_ata:    [u8; 32],
+    pub _reserved:       [u8; 32],
     pub user_src_escrow: [u8; 32],
-    pub amount_in:       u64,
-    pub min_out:         u64,
+    pub amount_in_atoms: u64,
+    pub min_out_atoms:   u64,
     pub expiry_slot:     u64,
     pub side:            u8,
     pub status:          u8,
@@ -24,7 +24,5 @@ impl Tagged for AsyncSwap {
 }
 
 pub mod status {
-    pub const PENDING:   u8 = 0;
-    pub const FILLED:    u8 = 1;
-    pub const CANCELLED: u8 = 2;
+    pub const PENDING: u8 = 0;
 }
