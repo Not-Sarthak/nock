@@ -7,6 +7,6 @@ target/
 .vscode/
 test-ledger/
 .surfpool/
-runbooks/
 scripts/
 deploy/
+*keypair*.json

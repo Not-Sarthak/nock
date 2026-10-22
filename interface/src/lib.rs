@@ -8,7 +8,7 @@ pub mod math;
 pub mod state;
 
 pub mod id {
-    solana_address::declare_id!("7VAMrYiGYS8orio29rF5U4WPaNRz8ymBEtoTbwNjJg2z");
+    solana_address::declare_id!("5rV6P9piXvRdVfhEVu9oJRHai7RS5iAJ1wuTNmeMCYhB");
 }
 
 pub use id::ID;

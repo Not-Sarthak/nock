@@ -1,38 +1,49 @@
-use pinocchio::{
-    account::AccountView, error::ProgramError, ProgramResult,
-};
+use crate::helpers::assertions::{check_owner, check_signer, check_writable};
+use crate::helpers::event::{check_event_accounts, emit};
 use nock_interface::{
     constants::MAX_FEE_PPM,
-    error::AmmError,
+    error::NockError,
+    events::{tag, ConfigUpdatedEvent},
+    instruction::{parse, UpdateConfigData},
     state::{load_mut, Market},
     ID,
 };
-use crate::helpers::assertions::{check_owner, check_signer, check_writable};
-use crate::helpers::unsafe_eq::eq_addr;
+use pinocchio::{account::AccountView, error::ProgramError, ProgramResult};
 
 pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
-    let [market, admin, ..] = accounts else {
+    let [market, admin, event_authority, program, ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
-    if data.len() < 8 {
-        return Err(ProgramError::InvalidInstructionData);
-    }
-    let maker_fee_ppm = i32::from_le_bytes(data[0..4].try_into().unwrap());
-    let taker_fee_ppm = i32::from_le_bytes(data[4..8].try_into().unwrap());
-    if maker_fee_ppm.abs() > MAX_FEE_PPM || taker_fee_ppm.abs() > MAX_FEE_PPM {
-        return Err(AmmError::InvalidMarketConfig.into());
+    let args = parse::<UpdateConfigData>(data).ok_or(ProgramError::InvalidInstructionData)?;
+    let maker_fee_ppm = args.maker_fee_ppm;
+    let taker_fee_ppm = args.taker_fee_ppm;
+    if maker_fee_ppm > MAX_FEE_PPM || taker_fee_ppm > MAX_FEE_PPM {
+        return Err(NockError::InvalidFee.into());
     }
 
     check_signer(admin)?;
     check_writable(market)?;
     check_owner(market, &ID)?;
+    check_event_accounts(event_authority, program)?;
 
-    let mut market_data = market.try_borrow_mut()?;
-    let market_state = load_mut::<Market>(&mut market_data[..])?;
-    if !eq_addr(admin.address().as_ref(), &market_state.admin) {
-        return Err(AmmError::UnauthorizedMaker.into());
+    {
+        let mut market_data = market.try_borrow_mut()?;
+        let m = load_mut::<Market>(&mut market_data[..])?;
+        if admin.address().as_array() != &m.admin {
+            return Err(NockError::UnauthorizedAdmin.into());
+        }
+        m.maker_fee_ppm = maker_fee_ppm;
+        m.taker_fee_ppm = taker_fee_ppm;
     }
-    market_state.maker_fee_ppm = maker_fee_ppm;
-    market_state.taker_fee_ppm = taker_fee_ppm;
-    Ok(())
+
+    emit(
+        &ConfigUpdatedEvent {
+            tag: tag::CONFIG_UPDATED,
+            market: market.address().to_bytes(),
+            admin: admin.address().to_bytes(),
+            maker_fee_ppm,
+            taker_fee_ppm,
+        },
+        event_authority,
+    )
 }

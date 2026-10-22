@@ -1,43 +1,25 @@
-use pinocchio::{
-    account::AccountView, error::ProgramError,
-    sysvars::{clock::Clock, Sysvar}, ProgramResult,
-};
+use super::{update_book, BookAuth};
 use nock_interface::{
-    error::AmmError,
-    instruction::UpdateMidPriceData,
-    state::{load_mut, MakerBook},
-    ID,
+    events::tag,
+    instruction::{parse, UpdateMidPriceData},
 };
-use crate::helpers::assertions::{check_owner, check_signer, check_writable};
-use crate::helpers::unsafe_eq::eq_addr;
+use pinocchio::{account::AccountView, error::ProgramError, ProgramResult};
 
+/// Moves the mid, repricing every level, and refreshes the quote slot.
 pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
-    let [signer, book, ..] = accounts else {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    };
-    if data.len() < core::mem::size_of::<UpdateMidPriceData>() {
-        return Err(ProgramError::InvalidInstructionData);
-    }
-    let args: &UpdateMidPriceData = unsafe { &*(data.as_ptr() as *const UpdateMidPriceData) };
-    let new_seq = args.sequence_number;
+    let args = parse::<UpdateMidPriceData>(data).ok_or(ProgramError::InvalidInstructionData)?;
+    let sequence = args.sequence_number;
     let new_mid = args.new_mid_ticks;
 
-    check_signer(signer)?;
-    check_writable(book)?;
-    check_owner(book, &ID)?;
-
-    let slot = Clock::get()?.slot;
-
-    let mut book_data = book.try_borrow_mut()?;
-    let book_state = load_mut::<MakerBook>(&mut book_data[..])?;
-    let signer_bytes = signer.address().as_ref();
-    if !eq_addr(signer_bytes, &book_state.maker) && !eq_addr(signer_bytes, &book_state.delegate) {
-        return Err(AmmError::UnauthorizedMaker.into());
-    }
-    if !book_state.try_bump_sequence(new_seq) {
-        return Err(AmmError::StaleSequence.into());
-    }
-    book_state.mid_price_ticks   = new_mid;
-    book_state.last_updated_slot = slot;
-    Ok(())
+    update_book(
+        accounts,
+        tag::MID_UPDATED,
+        BookAuth::MakerOrDelegate,
+        Some(sequence),
+        |b, role, slot| {
+            b.mid_price_ticks = new_mid;
+            b.last_updated_slot = slot;
+            Ok(b.validate_quotes(role)?)
+        },
+    )
 }

@@ -1,3 +1,5 @@
 [toolchain]
-channel = "1.89.0"
+# host toolchain for tests and clippy; mollusk 0.12 (agave 3.1 runtime) needs rustc 1.92.
+# cargo build-sbf uses the platform-tools rustc that ships with the pinned solana release.
+channel = "1.92.0"
 components = ["rustfmt", "clippy"]

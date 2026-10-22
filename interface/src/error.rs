@@ -2,34 +2,46 @@ use pinocchio::error::ProgramError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
-pub enum AmmError {
-    InvalidAccountTag         = 0x100,
-    InvalidTokenProgram       = 0x103,
-    IncorrectTokenAccountMint = 0x108,
-    InvalidPdaBump            = 0x10a,
-    InvalidDestination        = 0x10b,
-
-    UnauthorizedMaker     = 0x1f6,
-    QuoteExpired          = 0x1f7,
-    QuoteSizeTooSmall     = 0x1f8,
-    QuoteIndexOutOfBounds = 0x1f9,
-    StaleSequence         = 0x1fd,
-
-    SlippageExceeded         = 0x200,
-    AmountInZero             = 0x201,
-    InsufficientVaultBalance = 0x202,
-    PriceMathOverflow        = 0x203,
-
-    MarketPaused        = 0x300,
-    InvalidMarketConfig = 0x302,
-    BookHalted          = 0x303,
-
-    SwapNotPending = 0x400,
+pub enum NockError {
+    InvalidTokenProgram = 0,
+    Token2022Unsupported = 1,
+    InvalidMint = 2,
+    IncorrectVault = 3,
+    IncorrectTokenAccount = 4,
+    InvalidPda = 5,
+    MarketMismatch = 6,
+    UnauthorizedAdmin = 7,
+    UnauthorizedMaker = 8,
+    MarketPaused = 9,
+    InvalidMarketConfig = 10,
+    InvalidFee = 11,
+    BookHalted = 12,
+    QuoteExpired = 13,
+    StaleSequence = 14,
+    SequenceJumpTooLarge = 15,
+    SequenceMismatch = 16,
+    InvalidQuotes = 17,
+    OutsideDelegateBounds = 18,
+    InvalidExpiry = 19,
+    AmountZero = 20,
+    InsufficientLiquidity = 21,
+    SlippageExceeded = 22,
+    InsufficientInventory = 23,
+    MathOverflow = 24,
+    QuoteSizeTooSmall = 25,
+    InvalidSide = 26,
+    AsyncWindowViolated = 27,
+    AsyncSwapExpired = 28,
+    AsyncSwapNotExpired = 29,
+    MakerNotSelected = 30,
+    BookNotEmpty = 31,
+    InvalidEventAuthority = 32,
+    NoPendingAdmin = 33,
 }
 
-impl From<AmmError> for ProgramError {
+impl From<NockError> for ProgramError {
     #[inline]
-    fn from(e: AmmError) -> Self {
+    fn from(e: NockError) -> Self {
         ProgramError::Custom(e as u32)
     }
 }

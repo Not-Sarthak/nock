@@ -4,16 +4,24 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Integration tests for nock"
+repository.workspace = true
+description = "Unit tests and mollusk tests against the built nock.so"
 
 [lib]
 crate-type = ["rlib"]
 path       = "src/lib.rs"
 
 [dev-dependencies]
-ed25519-dalek.workspace      = true
-bytemuck.workspace           = true
-solana-pubkey                = { workspace = true, features = ["curve25519"] }
-solana-instruction           = { workspace = true, features = ["std"] }
-solana-sysvar-id.workspace   = true
-nock-interface           = { path = "../interface" }
+pinocchio.workspace = true
+nock-interface      = { path = "../interface" }
+# mollusk 0.12 runs the agave 3.1 runtime, matching the pinned solana 3.1.6 release.
+mollusk-svm                = { version = "0.12.0", features = ["inner-instructions"] }
+mollusk-svm-programs-token = { version = "0.12.0", default-features = false, features = ["token", "associated-token"] }
+solana-account             = "3.2"
+solana-instruction         = "3.1"
+solana-program-error       = "3.0"
+solana-pubkey              = { version = "4.0", features = ["curve25519"] }
+solana-rent                = "3.0"
+solana-sdk-ids             = "3.1"
+# reads idl/nock.json to check it against the program.
+serde_json                 = "1.0"

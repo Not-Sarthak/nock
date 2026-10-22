@@ -1,0 +1,2 @@
+# generated code keeps rustfmt defaults, like the program.
+max_width = 100

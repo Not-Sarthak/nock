@@ -1,33 +1,35 @@
-use pinocchio::{
-    account::AccountView, error::ProgramError, ProgramResult,
-};
+use super::{parse_flag, update_book, BookAuth};
 use nock_interface::{
-    error::AmmError,
-    state::{load_mut, maker_book::book_status, MakerBook},
-    ID,
+    error::NockError,
+    events::tag,
+    instruction::{parse, SetBookHaltData},
+    state::{maker_book::book_status, Role},
 };
-use crate::helpers::assertions::{check_owner, check_signer, check_writable};
-use crate::helpers::unsafe_eq::eq_addr;
+use pinocchio::{account::AccountView, error::ProgramError, ProgramResult};
 
+/// Halts or resumes every quote on the book. Sequenced, so a stale resume can never land
+/// after a newer halt. A delegate may halt, but only the maker may resume, so a maker who
+/// halts against a misbehaving delegate cannot be overridden by it.
 pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
-    let [signer, book, ..] = accounts else {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    };
-    if data.is_empty() {
-        return Err(ProgramError::InvalidInstructionData);
-    }
-    let halted = data[0] != 0;
+    let args = parse::<SetBookHaltData>(data).ok_or(ProgramError::InvalidInstructionData)?;
+    let sequence = args.sequence_number;
+    let halted = parse_flag(args.halted)?;
 
-    check_signer(signer)?;
-    check_writable(book)?;
-    check_owner(book, &ID)?;
-
-    let mut book_data = book.try_borrow_mut()?;
-    let b = load_mut::<MakerBook>(&mut book_data[..])?;
-    let signer_bytes = signer.address().as_ref();
-    if !eq_addr(signer_bytes, &b.maker) && !eq_addr(signer_bytes, &b.delegate) {
-        return Err(AmmError::UnauthorizedMaker.into());
-    }
-    b.status = if halted { book_status::HALTED } else { book_status::ACTIVE };
-    Ok(())
+    update_book(
+        accounts,
+        tag::HALT_SET,
+        BookAuth::MakerOrDelegate,
+        Some(sequence),
+        |b, role, _| {
+            if !halted && role != Role::Maker {
+                return Err(NockError::UnauthorizedMaker.into());
+            }
+            b.status = if halted {
+                book_status::HALTED
+            } else {
+                book_status::ACTIVE
+            };
+            Ok(())
+        },
+    )
 }

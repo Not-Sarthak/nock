@@ -1,98 +1,93 @@
-use pinocchio::{
-    account::AccountView, error::ProgramError, ProgramResult,
-};
+use super::read_market;
+use crate::helpers::assertions::{check_owner, check_signer, check_token_program, check_writable};
+use crate::helpers::event::{check_event_accounts, emit};
 use nock_interface::{
-    error::AmmError,
-    instruction::MakerDepositData,
-    state::{load, load_mut, MakerBook, Market},
+    error::NockError,
+    events::{tag, InventoryEvent},
+    instruction::{parse, MakerFundsData},
+    state::{load_mut, MakerBook, Role},
     ID,
 };
-use crate::helpers::assertions::{check_owner, check_signer, check_writable};
-use crate::helpers::unsafe_eq::eq_addr;
-use super::token_programs;
+use pinocchio::{account::AccountView, error::ProgramError, ProgramResult};
+use pinocchio_token::instructions::Transfer;
 
+/// Moves base and/or quote lots from the maker's token accounts into the market vaults and
+/// credits them to the maker's book.
 pub fn process(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
-    let [
-        market,
-        book,
-        maker,
-        base_mint,
-        quote_mint,
-        base_vault,
-        quote_vault,
-        maker_base_ata,
-        maker_quote_ata,
-        base_token_program,
-        quote_token_program,
-        ..
-    ] = accounts
+    let [maker, market, book, base_vault, quote_vault, maker_base, maker_quote, token_program, event_authority, program, ..] =
+        accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
-    if data.len() < core::mem::size_of::<MakerDepositData>() {
-        return Err(ProgramError::InvalidInstructionData);
-    }
-    let args: &MakerDepositData = unsafe { &*(data.as_ptr() as *const MakerDepositData) };
-    let base_lots  = args.base_lots;
+    let args = parse::<MakerFundsData>(data).ok_or(ProgramError::InvalidInstructionData)?;
+    let base_lots = args.base_lots;
     let quote_lots = args.quote_lots;
     if base_lots == 0 && quote_lots == 0 {
-        return Err(AmmError::AmountInZero.into());
+        return Err(NockError::AmountZero.into());
     }
 
     check_signer(maker)?;
     check_writable(book)?;
-    check_writable(base_vault)?;
-    check_writable(quote_vault)?;
-    check_writable(maker_base_ata)?;
-    check_writable(maker_quote_ata)?;
-    check_owner(market, &ID)?;
     check_owner(book, &ID)?;
-    if !token_programs::is_token_program(base_token_program.address())
-        || !token_programs::is_token_program(quote_token_program.address())
-    {
-        return Err(AmmError::InvalidTokenProgram.into());
-    }
+    check_token_program(token_program)?;
+    check_event_accounts(event_authority, program)?;
 
-    let (base_atoms_per_lot, quote_atoms_per_lot) = {
-        let market_data = market.try_borrow()?;
-        let m = load::<Market>(&market_data[..])?;
+    let lots = read_market(market, |m| {
         if m.is_paused() {
-            return Err(AmmError::MarketPaused.into());
+            return Err(NockError::MarketPaused.into());
         }
-        if !eq_addr(base_mint.address().as_ref(),   &m.base_mint)
-            || !eq_addr(quote_mint.address().as_ref(),  &m.quote_mint)
-            || !eq_addr(base_vault.address().as_ref(),  &m.base_vault)
-            || !eq_addr(quote_vault.address().as_ref(), &m.quote_vault)
+        if base_vault.address().as_array() != &m.base_vault
+            || quote_vault.address().as_array() != &m.quote_vault
         {
-            return Err(AmmError::IncorrectTokenAccountMint.into());
+            return Err(NockError::IncorrectVault.into());
         }
-        (m.base_atoms_per_base_lot, m.quote_atoms_per_quote_lot)
-    };
+        Ok(m.lot_sizes())
+    })?;
+    let base_atoms = lots.base_atoms(base_lots)?;
+    let quote_atoms = lots.quote_atoms(quote_lots)?;
 
-    {
+    let (base_free, quote_free) = {
         let mut book_data = book.try_borrow_mut()?;
         let b = load_mut::<MakerBook>(&mut book_data[..])?;
-        if !eq_addr(maker.address().as_ref(), &b.maker) {
-            return Err(AmmError::UnauthorizedMaker.into());
+        if b.role_of(maker.address().as_ref())? != Role::Maker {
+            return Err(NockError::UnauthorizedMaker.into());
         }
-        if !eq_addr(market.address().as_ref(), &b.market) {
-            return Err(AmmError::InvalidAccountTag.into());
+        if market.address().as_array() != &b.market {
+            return Err(NockError::MarketMismatch.into());
         }
-        if base_lots > 0 {
-            b.base_free = b.base_free.checked_add(base_lots).ok_or(AmmError::PriceMathOverflow)?;
-        }
-        if quote_lots > 0 {
-            b.quote_free = b.quote_free.checked_add(quote_lots).ok_or(AmmError::PriceMathOverflow)?;
-        }
-    }
+        b.base_free = b
+            .base_free
+            .checked_add(base_lots)
+            .ok_or(NockError::MathOverflow)?;
+        b.quote_free = b
+            .quote_free
+            .checked_add(quote_lots)
+            .ok_or(NockError::MathOverflow)?;
+        (b.base_free, b.quote_free)
+    };
 
     if base_lots > 0 {
-        let amt = base_lots.checked_mul(base_atoms_per_lot).ok_or(AmmError::PriceMathOverflow)?;
-        pinocchio_token::instructions::Transfer::new(maker_base_ata, base_vault, maker, amt).invoke()?;
+        check_writable(base_vault)?;
+        check_writable(maker_base)?;
+        Transfer::new(maker_base, base_vault, maker, base_atoms).invoke()?;
     }
     if quote_lots > 0 {
-        let amt = quote_lots.checked_mul(quote_atoms_per_lot).ok_or(AmmError::PriceMathOverflow)?;
-        pinocchio_token::instructions::Transfer::new(maker_quote_ata, quote_vault, maker, amt).invoke()?;
+        check_writable(quote_vault)?;
+        check_writable(maker_quote)?;
+        Transfer::new(maker_quote, quote_vault, maker, quote_atoms).invoke()?;
     }
-    Ok(())
+
+    emit(
+        &InventoryEvent {
+            tag: tag::DEPOSIT,
+            book: book.address().to_bytes(),
+            market: market.address().to_bytes(),
+            maker: maker.address().to_bytes(),
+            base_lots,
+            quote_lots,
+            base_free,
+            quote_free,
+        },
+        event_authority,
+    )
 }

@@ -1,0 +1,114 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # keep in step with [workspace.metadata.cli] in Cargo.toml, rust-toolchain.toml and
+  # VERIFY_IMAGE in the Makefile.
+  SOLANA_VERSION: 3.1.6
+  RUST_TOOLCHAIN: 1.92.0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  program:
+    name: program (fmt, clippy, build-sbf, test)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: program
+
+      - name: cache solana release and platform tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
+          key: solana-${{ runner.os }}-${{ env.SOLANA_VERSION }}
+
+      - name: install solana ${{ env.SOLANA_VERSION }}
+        run: |
+          if [ ! -x "$HOME/.local/share/solana/install/active_release/bin/solana" ]; then
+            sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          fi
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - run: solana --version && cargo build-sbf --version
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: build-sbf
+        run: make build
+      - name: test (unit + mollusk against the built .so)
+        run: cargo test
+
+  client:
+    name: client (fmt, clippy, test, fetch feature)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: client
+          workspaces: client
+
+      - name: rustfmt
+        run: cd client && cargo fmt --check
+      - name: clippy
+        run: cd client && cargo clippy --all-targets --features fetch -- -D warnings
+      - name: test and check the fetch feature
+        run: make client-test
+
+  verifiable-build:
+    name: verifiable build (docker, pinned image)
+    # slow (pulls the image and builds inside it); run on main and on demand.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cache solana-verify
+        id: sv-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/solana-verify
+          key: solana-verify-0.5.2-${{ runner.os }}
+
+      - name: install solana-verify 0.5.2
+        if: steps.sv-cache.outputs.cache-hit != 'true'
+        run: cargo install solana-verify --version 0.5.2 --locked
+
+      - name: build in the pinned image
+        run: make verify-build
+
+      - name: executable hash
+        run: make verify-hash | tee verifiable-hash.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nock-verifiable
+          path: |
+            target/deploy/nock.so
+            verifiable-hash.txt
